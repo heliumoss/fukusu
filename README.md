@@ -1,21 +1,22 @@
-```txt
-npm install
-npm run dev
-```
+# fukusu
 
-```txt
-npm run deploy
-```
+an uploadthing compatible upload server
 
-[For generating/synchronizing types based on your Worker configuration run](https://developers.cloudflare.com/workers/wrangler/commands/#types):
+## what does it do
+fukusu is a middleman between the uploadthing package and your own storage bucket. this means you basically get the freedom to use any provider but with the incredible DX of uploadthing.
 
-```txt
-npm run cf-typegen
-```
+## supported providers
+[ ] Cloudflare R2
+[ ] Backblaze B2
+[ ] Generic S3 provider
 
-Pass the `CloudflareBindings` as generics when instantiation `Hono`:
+## supported features
+[ ] uploads
+[ ] multiple apps
+[ ] authed requests (currently assumes that everything is authenticated)
 
-```ts
-// src/index.ts
-const app = new Hono<{ Bindings: CloudflareBindings }>()
-```
+## how do i use it
+TODO
+
+## why "fukusu"
+i googled the translation of "multiple" to japanese.
