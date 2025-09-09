@@ -36,3 +36,6 @@ lerna-debug.log*
 !.dev.vars.example
 .env*
 !.env.example
+
+#uploadthing soruce
+uploadthing/
