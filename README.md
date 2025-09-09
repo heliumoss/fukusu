@@ -6,12 +6,12 @@ an uploadthing compatible upload server
 fukusu is a middleman between the uploadthing package and your own storage bucket. this means you basically get the freedom to use any provider but with the incredible DX of uploadthing.
 
 ## supported providers
-- [ ] Cloudflare R2
+- [x] Cloudflare R2
 - [ ] Backblaze B2
 - [ ] Generic S3 provider
 
 ## supported features
-- [ ] uploads
+- [x] uploads
 - [ ] multiple apps
 - [ ] authed requests (currently assumes that everything is authenticated)
 
