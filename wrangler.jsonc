@@ -23,8 +23,6 @@
   "vars": {
     "API_BASE_URL": "http://localhost:8787",
     "CLIENT_BASE_URL": "http://localhost:5173",
-    "PUBLIC_URL": "http://localhost:8787/get",
-    "UPLOADTHING_SECRET": "sk_live_fukusudev",
   },
   "kv_namespaces": [
     {

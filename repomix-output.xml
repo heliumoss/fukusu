@@ -1,0 +1,1487 @@
+This file is a merged representation of the entire codebase, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of the entire repository's contents.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+lib/
+  constants.ts
+  crypto.ts
+  db.ts
+  logger.ts
+  middleware.ts
+  schemas.ts
+  utils.ts
+prisma/
+  schema.prisma
+storage/
+  adapter.ts
+  index.ts
+  localStorage.ts
+.env.example
+.gitignore
+compose.yml
+Dockerfile
+genUtAPIKey.ts
+index.ts
+package.json
+README.md
+tsconfig.json
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path="lib/constants.ts">
+export const API_SECRET = Bun.env.API_SECRET!;
+export const BASE_URL = Bun.env.BASE_URL!;
+export const APP_ID = Bun.env.APP_ID || "self-hosted";
+export const STORAGE_PROVIDER = Bun.env.STORAGE_PROVIDER || "local";
+</file>
+
+<file path="lib/crypto.ts">
+import * as crypto from "crypto";
+
+export const encoder = new TextEncoder();
+export const signaturePrefix = "hmac-sha256=";
+export const toHex = (buffer: ArrayBuffer) =>
+  Array.from(new Uint8Array(buffer))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+/**
+ * Verifies a signature sent from the UploadThing SDK.
+ * The SDK signs the *full URL string* (minus the signature param itself).
+ *
+ * @param requestUrl The full URL of the incoming request.
+ * @param secret The API secret key.
+ * @returns `true` if the signature is valid.
+ */
+export async function verifySdkSignature(
+  requestUrl: string,
+  secret: string
+): Promise<boolean> {
+  const url = new URL(requestUrl);
+
+  // 1. Extract the signature from the query params
+  const rawSig = url.searchParams.get("signature");
+  if (!rawSig) return false;
+
+  // 2. Reconstruct the payload string that was signed by the SDK
+  // This is the full URL, but with the `&signature=...` part removed.
+  url.searchParams.delete("signature");
+  const payload = url.toString();
+
+  // 3. Strip the "hmac-sha256=" prefix from the received signature
+  let sig = rawSig;
+  if (sig.startsWith(signaturePrefix)) {
+    sig = sig.substring(signaturePrefix.length);
+  }
+
+  // 4. Re-compute the expected signature
+  const key = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["verify"]
+  );
+
+  // 5. Decode the client's hex signature
+  let sigBytes: Uint8Array;
+  try {
+    sigBytes = Buffer.from(sig, "hex");
+  } catch {
+    return false; // Invalid hex
+  }
+
+  // 6. Use crypto.subtle.verify for a timing-safe comparison
+  return await crypto.subtle.verify(
+    "HMAC",
+    key,
+    sigBytes,
+    encoder.encode(payload)
+  );
+}
+</file>
+
+<file path="lib/db.ts">
+import { PrismaClient } from "@prisma/client";
+
+const globalForPrisma = globalThis as unknown as {
+  prisma: PrismaClient | undefined;
+};
+
+export const prisma =
+  globalForPrisma.prisma ??
+  new PrismaClient({
+    log:
+      process.env.NODE_ENV === "development"
+        ? ["query", "error", "warn"]
+        : ["error"],
+  });
+
+if (process.env.NODE_ENV !== "production") {
+  globalForPrisma.prisma = prisma;
+}
+</file>
+
+<file path="lib/logger.ts">
+import { createConsola } from "consola";
+
+const level = process.env.DEBUG === "1" ? 4 : 3;
+
+const logger = createConsola({
+  level,
+});
+
+export default logger;
+</file>
+
+<file path="lib/middleware.ts">
+import type { Context, Next } from "hono";
+import { parseApiToken, validateApiKey } from "./utils";
+import { verifySdkSignature } from "./crypto";
+import logger from "./logger";
+import { API_SECRET } from "./constants";
+
+// this is the primary auth middleware for the API
+export async function authMiddleware(c: Context, next: Next) {
+  if (c.req.path.startsWith("/f/")) {
+    return await next();
+  }
+
+  const authHeader = c.req.header("x-uploadthing-api-key");
+  if (!authHeader) return c.json({ error: "Missing API key" }, 401);
+
+  const tokenData = parseApiToken(authHeader);
+  if (!tokenData) return c.json({ error: "Invalid API token format" }, 401);
+
+  if (!validateApiKey(tokenData.apiKey, API_SECRET)) {
+    return c.json({ error: "Invalid API key" }, 403);
+  }
+
+  c.set("auth", tokenData);
+  await next();
+}
+// used for some signature things in the ingest API
+export const ingestAuthMiddleware = async (c: Context, next: Next) => {
+  if (!(await verifySdkSignature(c.req.url, API_SECRET))) {
+    logger.error("Invalid signature for", c.req.url);
+    return c.text("Invalid signature", 403);
+  }
+  await next();
+};
+// used for debug
+export const requestLoggerMiddleware = (c: Context, next: Next) => {
+  logger.debug("Incoming request", c.req.method, c.req.url);
+  return next();
+};
+</file>
+
+<file path="lib/schemas.ts">
+import { z } from "zod";
+
+export const UploadFilesRequestSchema = z.object({
+  files: z.array(
+    z.object({
+      name: z.string(),
+      size: z.number(),
+      type: z.string(),
+      customId: z.string().optional(),
+    }),
+  ),
+  metadata: z.record(z.any()).optional(),
+  acl: z.enum(["public-read", "private"]).optional().default("private"),
+  contentDisposition: z
+    .enum(["inline", "attachment"])
+    .optional()
+    .default("inline"),
+});
+export const DeleteFilesRequestSchema = z
+  .object({
+    fileKeys: z.array(z.string()).optional(),
+    customIds: z.array(z.string()).optional(),
+  })
+  .refine((data) => data.fileKeys || data.customIds);
+export const ListFilesRequestSchema = z.object({
+  limit: z.number().optional().default(20),
+  offset: z.number().optional().default(0),
+});
+export const RenameFileUpdateSchema = z
+  .object({
+    fileKey: z.string().optional(),
+    customId: z.string().optional(),
+    newName: z.string(),
+  })
+  .refine((data) => data.fileKey || data.customId);
+export const RenameFilesRequestSchema = z.object({
+  updates: z.array(RenameFileUpdateSchema),
+});
+export const GetSignedUrlRequestSchema = z
+  .object({
+    fileKey: z.string().optional(),
+    customId: z.string().optional(),
+    expiresIn: z.number().optional().default(3600),
+  })
+  .refine((data) => data.fileKey || data.customId);
+export const UpdateAclUpdateSchema = z
+  .object({
+    fileKey: z.string().optional(),
+    customId: z.string().optional(),
+    acl: z.enum(["public-read", "private"]),
+  })
+  .refine((data) => data.fileKey || data.customId);
+export const UpdateAclRequestSchema = z.object({
+  updates: z.array(UpdateAclUpdateSchema),
+});
+
+
+export const IngestQuerySchema = z.object({
+  signature: z.string(),
+  expires: z.string(),
+  "x-ut-identifier": z.string(),
+  "x-ut-file-name": z.string(),
+  "x-ut-file-size": z.string(),
+  "x-ut-file-type": z.string(),
+  "x-ut-slug": z.string(),
+  "x-ut-content-disposition": z.string(),
+  "x-ut-acl": z.string(),
+});
+const UrlWithOverridesSchema = z.object({
+  url: z.string().url(),
+  name: z.string().optional(),
+  customId: z.string().optional(),
+});
+
+export const UploadFilesFromUrlRequestSchema = z.object({
+  urls: z.array(z.union([z.string().url(), UrlWithOverridesSchema])),
+  metadata: z.record(z.any()).optional(),
+  acl: z.enum(["public-read", "private"]).optional(),
+  contentDisposition: z.enum(["inline", "attachment"]).optional(),
+});
+
+export const DirectUploadRequestSchema = z.object({
+  files: z.array(
+    z.object({
+      name: z.string().max(1024),
+      size: z.number().min(0),
+      type: z.string(),
+      customId: z.string().max(128).optional().nullable(),
+    }),
+  ),
+  acl: z.enum(["public-read", "private"]).optional(),
+  metadata: z.record(z.any()).optional().nullable(),
+  contentDisposition: z.enum(["inline", "attachment"]).default("inline"),
+});
+
+
+export const CompleteMultipartRequestSchema = z.object({
+  fileKey: z.string(),
+  uploadId: z.string(),
+  etags: z.array(
+    z.object({
+      tag: z.string(),
+      partNumber: z.number(),
+    }),
+  ),
+});
+
+
+export const FailureCallbackRequestSchema = z.object({
+  fileKey: z.string().max(300),
+  uploadId: z.string().optional().nullable(),
+});
+
+
+export const ServerCallbackRequestSchema = z.object({
+  fileKey: z.string().max(300),
+  callbackData: z.record(z.any()).optional().nullable(),
+});
+
+
+export const PrepareUploadV7RequestSchema = z.object({
+  fileName: z.string(),
+  fileSize: z.number(),
+  slug: z.string().optional(),
+  fileType: z.string().optional(),
+  customId: z.string().optional(),
+  contentDisposition: z.enum(["inline", "attachment"]).optional(),
+  acl: z.enum(["public-read", "private"]).optional(),
+  expiresIn: z.number().default(3600),
+});
+
+export const RouteMetadataRequestSchema = z.object({
+  fileKeys: z.array(z.string()),
+  metadata: z.record(z.any()).optional().nullable(),
+  isDev: z.boolean().optional().default(false),
+  callbackUrl: z.string().url(),
+  callbackSlug: z.string(),
+  awaitServerData: z.boolean().optional().default(true),
+});
+</file>
+
+<file path="lib/utils.ts">
+import { nanoid } from "nanoid";
+import { createHmac, timingSafeEqual } from "crypto";
+import { URL } from "url";
+import { API_SECRET } from "./constants";
+import { encoder, signaturePrefix, toHex } from "./crypto";
+
+export type ApiToken = {
+  appId: string;
+  apiKey: string;
+};
+
+export type TimeUnit = "s" | "m" | "h" | "d" | "w" | "M" | "y";
+export type TimeString = `${number}${TimeUnit}`;
+export type Time = TimeString | number;
+
+/**
+ * Generate a random 24-char file key.
+ */
+export function generateFileKey(): string {
+  return nanoid(24);
+}
+
+/**
+ * Parse an API token. Supports either:
+ *  - a “raw” apiKey (<=64 chars, no dots)
+ *  - a base64-encoded JSON string: { appId, apiKey }
+ *
+ * @returns {appId, apiKey} or null if invalid.
+ */
+export function parseApiToken(token: string): ApiToken | null {
+  if (!token.includes(".") && token.length <= 64) {
+    return { appId: "default", apiKey: token };
+  }
+
+  let json: string;
+  try {
+    json = Buffer.from(token, "base64").toString("utf-8");
+  } catch {
+    return null;
+  }
+
+  let parsed: any;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    return null;
+  }
+
+  if (typeof parsed !== "object" || typeof parsed.apiKey !== "string") {
+    return null;
+  }
+
+  return {
+    appId: typeof parsed.appId === "string" ? parsed.appId : "default",
+    apiKey: parsed.apiKey,
+  };
+}
+
+/**
+ * Simple secret-comparison for API keys.
+ */
+export function validateApiKey(apiKey: string, secret: string): boolean {
+  return apiKey === secret 
+}
+
+
+/**
+ * Verifies a signed URL generated with:
+ *
+ *   const payload = new URL(fullPath, BASE_URL).toString();
+ *   const sig     = HMAC_SHA256_HEX(secret, payload);
+ *   url.searchParams.append("signature", sig);
+ *
+ * and with an `expires` param that is a millisecond timestamp.
+ *
+ * @param  fullUrl  The *exact* URL you signed (including host, path, query)
+ * @param  secret   Your API secret
+ * @returns boolean true if signature matches & not expired
+ */
+export function verifyCdnSignedUrl(fullUrl: string, secret: string): boolean {
+  try {
+    // 1) Parse out everything
+    const u = new URL(fullUrl);
+    const expires = u.searchParams.get("expires");
+    const signature = u.searchParams.get("signature");
+    if (!expires || !signature) return false;
+
+    const expiresTs = parseInt(expires, 10);
+    if (Number.isNaN(expiresTs) || Date.now() > expiresTs) return false;
+
+    u.searchParams.delete("signature");
+    const payload = u.toString();
+
+    const expected = createHmac("sha256", secret).update(payload).digest();
+
+    let incoming = signature;
+    if (incoming.includes("=")) {
+      incoming = incoming.split("=").pop()!;
+    }
+    const incomingBuf = Buffer.from(incoming, "hex");
+
+    if (incomingBuf.length !== expected.length) return false;
+    return timingSafeEqual(incomingBuf, expected);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Convert a time string (e.g. "5m", "2h") or number into seconds.
+ * @throws if the format is invalid.
+ */
+export function parseTimeToSeconds(time: Time): number {
+  if (typeof time === "number") {
+    if (!Number.isFinite(time) || time < 0) {
+      throw new Error(`Invalid time number: ${time}`);
+    }
+    return Math.floor(time);
+  }
+
+  const match = /^(\d+)([smhdwMy])$/.exec(time);
+  if (!match) {
+    throw new Error(`Invalid time format: "${time}"`);
+  }
+
+  const value = parseInt(match[1]!, 10);
+  const unit = match[2] as TimeUnit;
+
+  switch (unit) {
+    case "s":
+      return value;
+    case "m":
+      return value * 60;
+    case "h":
+      return value * 3_600;
+    case "d":
+      return value * 86_400;
+    case "w":
+      return value * 604_800;
+    case "M":
+      return value * 2_592_000; // ≈30 days
+    case "y":
+      return value * 31_536_000; // ≈365 days
+  }
+}
+export async function generateSignedUploadUrl(
+  params: Record<string, string>,
+  expiresIn: number,
+): Promise<string> {
+  const url = new URL(params.key!);
+  const expirationTimestampMs = Date.now() + expiresIn * 1000;
+  url.searchParams.set("expires", expirationTimestampMs.toString());
+
+  for (const [key, value] of Object.entries(params)) {
+    url.searchParams.set(key, value);
+  }
+
+  const payload = url.toString();
+
+  const key = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(API_SECRET),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const signature = await crypto.subtle.sign(
+    "HMAC",
+    key,
+    encoder.encode(payload),
+  );
+  url.searchParams.set("signature", `${signaturePrefix}${toHex(signature)}`);
+
+  return url.toString();
+}
+</file>
+
+<file path="prisma/schema.prisma">
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./db.db"
+}
+
+model File {
+  id                 String   @id @default(cuid())
+  customId           String?  @unique @map("custom_id")
+  key                String   @unique
+  name               String
+  size               Int
+  type               String
+  status             FileStatus @default(UPLOADING)
+  acl                FileAcl    @default(PRIVATE)
+  contentDisposition ContentDisposition? @default(INLINE) @map("content_disposition")
+  metadata           String?  // JSON string
+  callbackUrl        String?  @map("callback_url")
+  callbackSlug       String?  @map("callback_slug")
+  fileHash           String?  @map("file_hash")
+  uploadedAt         DateTime? @map("uploaded_at")
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  @@map("files")
+}
+
+enum FileStatus {
+  DELETION_PENDING @map("Deletion Pending")
+  FAILED          @map("Failed")
+  UPLOADED        @map("Uploaded")
+  UPLOADING       @map("Uploading")
+}
+
+enum FileAcl {
+  PUBLIC_READ @map("public-read")
+  PRIVATE     @map("private")
+}
+
+enum ContentDisposition {
+  INLINE     @map("inline")
+  ATTACHMENT @map("attachment")
+}
+</file>
+
+<file path="storage/adapter.ts">
+import type { BunFile } from "bun";
+
+export interface StorageAdapter {
+  /** Uploads a file and returns its hash. */
+  upload(fileKey: string, file: Blob): Promise<{ fileHash: string }>;
+
+  /** Returns a stream or BunFile for downloading. */
+  getDownloadObject(fileKey: string): Promise<BunFile>;
+
+  /** Deletes a file from storage. */
+  delete(fileKey: string): Promise<void>;
+
+  /** Generates a temporary, signed URL for private files. */
+  getSignedUrl(fileKey: string, expiresIn: number): Promise<string>;
+
+  /** Gets the permanent public URL for a public file. */
+  getPublicUrl(fileKey: string): string;
+}
+</file>
+
+<file path="storage/index.ts">
+import type { StorageAdapter } from "./adapter";
+import { LocalStorageAdapter } from "./localStorage";
+
+const provider = Bun.env.STORAGE_PROVIDER || "local";
+const baseUrl = Bun.env.BASE_URL!;
+const apiSecret = Bun.env.API_SECRET!;
+
+let storageAdapter: StorageAdapter;
+
+switch (provider) {
+  case "local":
+    storageAdapter = new LocalStorageAdapter(baseUrl, apiSecret);
+    break;
+
+  default:
+    throw new Error(`Unsupported storage provider: ${provider}`);
+}
+
+if (!baseUrl || !apiSecret) {
+  throw new Error("BASE_URL and API_SECRET must be set in your .env file.");
+}
+
+export { storageAdapter };
+</file>
+
+<file path="storage/localStorage.ts">
+import type { BunFile } from "bun";
+import * as path from "path";
+import * as fs from "fs/promises";
+import * as crypto from "crypto";
+import type { StorageAdapter } from "./adapter";
+import { parseTimeToSeconds, type Time } from "../lib/utils";
+
+const UPLOADS_DIR = path.join(process.cwd(), "uploads");
+await fs.mkdir(UPLOADS_DIR, { recursive: true });
+
+export class LocalStorageAdapter implements StorageAdapter {
+  private baseUrl: string;
+  private apiSecret: string;
+
+  constructor(baseUrl: string, apiSecret: string) {
+    this.baseUrl = baseUrl;
+    this.apiSecret = apiSecret;
+  }
+
+  async upload(fileKey: string, file: Blob): Promise<{ fileHash: string }> {
+    const filePath = path.join(UPLOADS_DIR, fileKey);
+    const buffer = await file.arrayBuffer();
+
+    await Bun.write(filePath, buffer);
+
+    const hasher = new Bun.CryptoHasher("sha256");
+    hasher.update(buffer);
+    const fileHash = hasher.digest("hex");
+
+    return { fileHash };
+  }
+
+  async getDownloadObject(fileKey: string): Promise<BunFile> {
+    const filePath = path.join(UPLOADS_DIR, fileKey);
+    return Bun.file(filePath);
+  }
+
+  async delete(fileKey: string): Promise<void> {
+    try {
+      const filePath = path.join(UPLOADS_DIR, fileKey);
+      await fs.unlink(filePath);
+    } catch (error: any) {
+      if (error.code !== "ENOENT") {
+        console.error(`Failed to delete file ${fileKey}:`, error);
+      }
+    }
+  }
+
+  getPublicUrl(fileKey: string): string {
+    return `${this.baseUrl}/f/${fileKey}`;
+  }
+
+  async getSignedUrl(
+    fileKey: string,
+    expiresIn: number | Time,
+    data?: Record<string, string | number | boolean | null | undefined>,
+  ): Promise<string> {
+    const signaturePrefix = "hmac-sha256=";
+    const algorithm = { name: "HMAC", hash: "SHA-256" };
+    const toHex = (buffer: Uint8Array) =>
+      Array.prototype.map
+        .call(buffer, (x: number) => `00${x.toString(16)}`.slice(-2))
+        .join("");
+    const encoder = new TextEncoder();
+    const ttlInSeconds = parseTimeToSeconds(expiresIn);
+
+    if (isNaN(ttlInSeconds) || ttlInSeconds <= 0) {
+      throw new Error(
+        "Invalid expiresIn: must be a positive number of seconds or a valid time string.",
+      );
+    }
+    if (ttlInSeconds > 86400 * 7) {
+      throw new Error("expiresIn must be less than 7 days (604800 seconds).");
+    }
+
+    const urlBase = `${this.baseUrl}/f/${fileKey}`;
+    const parsedURL = new URL(urlBase);
+
+    const expirationTimestampMs = Date.now() + ttlInSeconds * 1000;
+    parsedURL.searchParams.append("expires", expirationTimestampMs.toString());
+
+    if (data) {
+      Object.entries(data).forEach(([key, value]) => {
+        if (value == null) return;
+        parsedURL.searchParams.append(key, encodeURIComponent(String(value)));
+      });
+    }
+
+    const payloadForSigning = parsedURL.toString();
+
+    let signature: string;
+    try {
+      const signingKey = await crypto.subtle.importKey(
+        "raw",
+        encoder.encode(this.apiSecret),
+        algorithm,
+        false,
+        ["sign"],
+      );
+
+      const signatureArrayBuffer = await crypto.subtle.sign(
+        algorithm,
+        signingKey,
+        encoder.encode(payloadForSigning),
+      );
+
+      const signatureHex = toHex(new Uint8Array(signatureArrayBuffer));
+
+      signature = `${signaturePrefix}${signatureHex}`;
+    } catch (e) {
+      throw new Error(
+        `Failed to generate URL signature: ${
+          e instanceof Error ? e.message : String(e)
+        }`,
+      );
+    }
+
+    parsedURL.searchParams.append("signature", signature);
+
+    return parsedURL.href;
+  }
+}
+</file>
+
+<file path=".env.example">
+PORT=3000
+BASE_URL="http://localhost:3000"
+STORAGE_PROVIDER="local"
+API_SECRET="sk_my-secret-key"
+APP_ID=my-app
+</file>
+
+<file path=".gitignore">
+# dependencies (bun install)
+node_modules
+
+# output
+out
+dist
+*.tgz
+
+# code coverage
+coverage
+*.lcov
+
+# logs
+logs
+_.log
+report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
+
+# dotenv environment variable files
+.env
+.env.development.local
+.env.test.local
+.env.production.local
+.env.local
+
+# caches
+.eslintcache
+.cache
+*.tsbuildinfo
+
+# IntelliJ based IDEs
+.idea
+
+# Finder (MacOS) folder config
+.DS_Store
+
+/generated/prisma
+uploads
+prisma/db.db
+</file>
+
+<file path="compose.yml">
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile 
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./db.db:/app/prisma/db.db 
+      - ./uploads:/app/uploads 
+    restart: unless-stopped
+    env_file:
+      - .env
+</file>
+
+<file path="Dockerfile">
+FROM oven/bun:latest
+WORKDIR /app
+COPY bun.lock package.json ./
+RUN bun install --frozen-lockfile
+RUN bun prisma db:push
+COPY . .
+EXPOSE 3000
+CMD ["bun", "run", "start"]
+</file>
+
+<file path="genUtAPIKey.ts">
+import z from "zod";
+import { APP_ID, BASE_URL, API_SECRET } from "lib/constants";
+const ConfigSchema = z.object({
+  apiKey: z.string(),
+  appId: z.string(),
+  regions: z.array(z.string()),
+  ingestHost: z.string(),
+});
+type Config = z.infer<typeof ConfigSchema>;
+
+/**
+ * Reads API_SECRET from env, validates it, and
+ * encodes the config to Base64.
+ */
+export function encodeConfigToBase64(): string {
+  if (!API_SECRET) {
+    throw new Error("Missing API_SECRET in environment variables");
+  }
+  if (!API_SECRET.startsWith("sk_")) {
+    throw new Error('API_SECRET must start with "sk_"');
+  }
+  // even though the ingets url doesn't do anything as it handled by another env variable in the ut app
+  const config: Config = {
+    apiKey: API_SECRET,
+    appId: APP_ID,
+    regions: ["us-east-1"],
+    ingestHost: BASE_URL,
+  };
+  const jsonString = JSON.stringify(config);
+  return Buffer.from(jsonString).toString("base64");
+}
+try {
+  const base64 = encodeConfigToBase64();
+  console.log("Here is your uploadthing token");
+  console.log(base64);
+} catch (err) {
+  console.error(err);
+  process.exit(1);
+}
+</file>
+
+<file path="index.ts">
+import { Hono } from "hono";
+import type { Context, Next } from "hono";
+import { zValidator } from "@hono/zod-validator";
+import { cors } from "hono/cors";
+import { prisma } from "lib/db";
+import {
+  authMiddleware,
+  ingestAuthMiddleware,
+  requestLoggerMiddleware,
+} from "lib/middleware";
+import { storageAdapter } from "./storage";
+import {
+  DeleteFilesRequestSchema,
+  GetSignedUrlRequestSchema,
+  ListFilesRequestSchema,
+  RenameFilesRequestSchema,
+  UpdateAclRequestSchema,
+  DirectUploadRequestSchema,
+  CompleteMultipartRequestSchema,
+  FailureCallbackRequestSchema,
+  PrepareUploadV7RequestSchema,
+  RouteMetadataRequestSchema,
+} from "lib/schemas";
+import { FileStatus as PrismaFileStatus } from "@prisma/client";
+import { logger as HonoLogger } from "hono/logger";
+import {
+  verifyCdnSignedUrl,
+  generateFileKey,
+  generateSignedUploadUrl,
+} from "lib/utils";
+import logger from "lib/logger";
+import { API_SECRET, BASE_URL, APP_ID, STORAGE_PROVIDER } from "lib/constants";
+
+const app = new Hono();
+
+if (!API_SECRET || !BASE_URL) {
+  throw new Error("API_SECRET and BASE_URL must be set in your .env file.");
+}
+
+app.use("*", cors());
+
+if (Bun.env.DEBUG !== "1") {
+  app.use("*", HonoLogger());
+}
+
+app.use("*", requestLoggerMiddleware);
+
+app.get("/", (c) => {
+  logger.debug("Health check");
+  return c.json({ status: "ok", service: "uploadthing-clone" });
+});
+
+app.get("/:fileKey", ingestAuthMiddleware, async (c) => {
+  const fileKey = c.req.param("fileKey");
+  const q = c.req.query();
+  logger.log("Pre-flight check for fileKey:", fileKey);
+  await prisma.file.upsert({
+    where: { key: fileKey },
+    create: {
+      key: fileKey,
+      name: decodeURIComponent(q["x-ut-file-name"] ?? "unknown-file"),
+      size: parseInt(q["x-ut-file-size"] ?? "0"),
+      type: decodeURIComponent(
+        q["x-ut-file-type"] ?? "application/octet-stream",
+      ),
+      status: "UPLOADING",
+      acl: q["x-ut-acl"] === "public-read" ? "PUBLIC_READ" : "PRIVATE",
+      contentDisposition:
+        q["x-ut-content-disposition"] === "attachment"
+          ? "ATTACHMENT"
+          : "INLINE",
+    },
+    update: {},
+  });
+  return c.text("", 200);
+});
+
+app.put("/:fileKey", ingestAuthMiddleware, async (c) => {
+  const fileKey = c.req.param("fileKey");
+  const q = c.req.query();
+  logger.debug("Starting upload for fileKey:", fileKey);
+  await prisma.file.upsert({
+    where: { key: fileKey },
+    create: {
+      key: fileKey,
+      name: decodeURIComponent(q["x-ut-file-name"] ?? "unknown"),
+      size: parseInt(q["x-ut-file-size"] ?? "0", 10),
+      type: decodeURIComponent(
+        q["x-ut-file-type"] ?? "application/octet-stream",
+      ),
+      status: "UPLOADING",
+      acl: q["x-ut-acl"] === "public-read" ? "PUBLIC_READ" : "PRIVATE",
+      contentDisposition:
+        q["x-ut-content-disposition"] === "attachment"
+          ? "ATTACHMENT"
+          : "INLINE",
+    },
+    update: {},
+  });
+  const blob = await c.req.blob();
+  const { fileHash } = await storageAdapter.upload(fileKey, blob);
+  const updated = await prisma.file.update({
+    where: { key: fileKey },
+    data: { status: "UPLOADED", fileHash, uploadedAt: new Date() },
+  });
+  logger.log("Upload complete for", fileKey, "hash:", fileHash);
+  return c.json({
+    ufsUrl: storageAdapter.getPublicUrl(fileKey),
+    file: updated,
+  });
+});
+
+const v6api = new Hono();
+v6api.use("*", authMiddleware);
+
+v6api.post(
+  "/deleteFiles",
+  zValidator("json", DeleteFilesRequestSchema),
+  async (c) => {
+    const { fileKeys, customIds } = c.req.valid("json");
+    logger.log("Deleting files:", { fileKeys, customIds });
+    const where = fileKeys
+      ? { key: { in: fileKeys } }
+      : { customId: { in: customIds! } };
+    const filesToDelete = await prisma.file.findMany({ where });
+    await Promise.all(
+      filesToDelete.map((file) => storageAdapter.delete(file.key)),
+    );
+    const { count } = await prisma.file.deleteMany({ where });
+    logger.debug("Deleted files count:", count);
+    return c.json({ success: true, deletedCount: count });
+  },
+);
+
+v6api.post(
+  "/listFiles",
+  zValidator("json", ListFilesRequestSchema),
+  async (c) => {
+    const { limit, offset } = c.req.valid("json");
+    logger.log("Listing files", { limit, offset });
+    const [files, total] = await Promise.all([
+      prisma.file.findMany({
+        take: limit,
+        skip: offset,
+        orderBy: { createdAt: "desc" },
+      }),
+      prisma.file.count(),
+    ]);
+    const statusMap: Record<
+      PrismaFileStatus,
+      "Deletion Pending" | "Failed" | "Uploaded" | "Uploading"
+    > = {
+      DELETION_PENDING: "Deletion Pending",
+      FAILED: "Failed",
+      UPLOADED: "Uploaded",
+      UPLOADING: "Uploading",
+    };
+    const formattedFiles = files.map((f) => ({
+      id: f.id,
+      customId: f.customId,
+      key: f.key,
+      name: f.name,
+      size: f.size,
+      status: statusMap[f.status],
+      uploadedAt: f.uploadedAt?.getTime() ?? f.createdAt.getTime(),
+    }));
+    return c.json({
+      hasMore: offset + files.length < total,
+      files: formattedFiles,
+    });
+  },
+);
+
+v6api.post(
+  "/renameFiles",
+  zValidator("json", RenameFilesRequestSchema),
+  async (c) => {
+    const { updates } = c.req.valid("json");
+    logger.log("Renaming files:", updates);
+    const results = await prisma.$transaction(
+      updates.map((u) =>
+        prisma.file.updateMany({
+          where: u.fileKey ? { key: u.fileKey } : { customId: u.customId! },
+          data: { name: u.newName },
+        }),
+      ),
+    );
+    const renamedCount = results.reduce((sum, result) => sum + result.count, 0);
+    return c.json({ success: true, renamedCount });
+  },
+);
+
+v6api.post(
+  "/requestFileAccess",
+  zValidator("json", GetSignedUrlRequestSchema),
+  async (c) => {
+    const { fileKey, customId, expiresIn } = c.req.valid("json");
+    logger.debug("Requesting file access for", { fileKey, customId });
+    const file = await prisma.file.findFirstOrThrow({
+      where: fileKey ? { key: fileKey } : { customId },
+    });
+    const url =
+      file.acl === "PRIVATE"
+        ? await storageAdapter.getSignedUrl(file.key, expiresIn)
+        : storageAdapter.getPublicUrl(file.key);
+    logger.log("File access URL generated");
+    return c.json({ url, ufsUrl: url });
+  },
+);
+
+v6api.post(
+  "/updateACL",
+  zValidator("json", UpdateAclRequestSchema),
+  async (c) => {
+    const { updates } = c.req.valid("json");
+    logger.log("Updating ACLs:", updates);
+    const results = await prisma.$transaction(
+      updates.map((u) =>
+        prisma.file.updateMany({
+          where: u.fileKey ? { key: u.fileKey } : { customId: u.customId! },
+          data: { acl: u.acl === "public-read" ? "PUBLIC_READ" : "PRIVATE" },
+        }),
+      ),
+    );
+    const updatedCount = results.reduce((sum, result) => sum + result.count, 0);
+    return c.json({ success: true, updatedCount });
+  },
+);
+
+v6api.get("/pollUpload/:fileKey", async (c) => {
+  const fileKey = c.req.param("fileKey");
+  logger.log("Polling for upload status of", fileKey);
+  const file = await prisma.file.findUnique({ where: { key: fileKey } });
+  if (!file) return c.json({ error: "File not found" }, 404);
+  const isDone = file.status === "UPLOADED";
+  return c.json({
+    status: isDone ? "done" : "still working",
+    file: isDone
+      ? {
+          fileKey: file.key,
+          fileName: file.name,
+          fileSize: file.size,
+          fileType: file.type,
+          fileUrl: storageAdapter.getPublicUrl(file.key),
+          customId: file.customId,
+        }
+      : null,
+    metadata: null,
+    callbackData: null,
+  });
+});
+
+v6api.post(
+  "/uploadFiles",
+  zValidator("json", DirectUploadRequestSchema),
+  async (c) => {
+    const { files, acl, contentDisposition } = c.req.valid("json");
+    logger.log("Requesting presigned URLs for direct upload", {
+      count: files.length,
+    });
+    const responseData = await Promise.all(
+      files.map(async (fileInfo) => {
+        const key = generateFileKey();
+        const aclValue = acl === "public-read" ? "public-read" : "private";
+        const cdValue =
+          contentDisposition === "attachment" ? "attachment" : "inline";
+
+        const url = await generateSignedUploadUrl(
+          {
+            key,
+            "x-ut-file-name": fileInfo.name,
+            "x-ut-file-size": String(fileInfo.size),
+            "x-ut-file-type": fileInfo.type,
+            "x-ut-acl": aclValue,
+            "x-ut-content-disposition": cdValue,
+          },
+          3600,
+        );
+
+        return {
+          key,
+          fileName: fileInfo.name,
+          fileType: fileInfo.type,
+          fileUrl: storageAdapter.getPublicUrl(key),
+          url,
+          customId: fileInfo.customId,
+          contentDisposition,
+          pollingJwt: "not-implemented",
+          pollingUrl: `${BASE_URL}/v6/pollUpload/${key}`,
+          fields: {},
+        };
+      }),
+    );
+    return c.json({ data: responseData });
+  },
+);
+
+v6api.post(
+  "/completeMultipart",
+  zValidator("json", CompleteMultipartRequestSchema),
+  async (c) => {
+    const { fileKey } = c.req.valid("json");
+    logger.log("Completing multipart upload for", fileKey);
+    await prisma.file.update({
+      where: { key: fileKey },
+      data: { status: "UPLOADED", uploadedAt: new Date() },
+    });
+    return c.json({ success: true });
+  },
+);
+
+v6api.post(
+  "/failureCallback",
+  zValidator("json", FailureCallbackRequestSchema),
+  async (c) => {
+    const { fileKey, uploadId } = c.req.valid("json");
+    logger.error("Received failure callback for", { fileKey, uploadId });
+    await prisma.file.update({
+      where: { key: fileKey },
+      data: { status: "FAILED" },
+    });
+    return c.json({ success: true });
+  },
+);
+
+v6api.post("/getUsageInfo", async (c) => {
+  logger.log("Requesting usage info");
+  const [usage, count] = await Promise.all([
+    prisma.file.aggregate({ _sum: { size: true } }),
+    prisma.file.count(),
+  ]);
+  const totalBytes = usage._sum.size ?? 0;
+  return c.json({
+    totalBytes,
+    appTotalBytes: totalBytes,
+    filesUploaded: count,
+    limitBytes: -1,
+  });
+});
+
+app.route("/v6", v6api);
+
+const v7api = new Hono();
+
+v7api.use("*", authMiddleware);
+
+v7api.post("/getAppInfo", async (c) => {
+  return c.json({
+    appId: Bun.env.APP_ID || "self-hosted",
+    defaultACL: "private",
+    allowACLOverride: true,
+  });
+});
+
+v7api.post(
+  "/prepareUpload",
+  zValidator("json", PrepareUploadV7RequestSchema),
+  async (c) => {
+    const body = c.req.valid("json");
+    logger.log("Preparing v7 upload for", body.fileName);
+    const key = generateFileKey();
+    const url = await generateSignedUploadUrl(
+      {
+        key,
+        "x-ut-file-name": body.fileName,
+        "x-ut-file-size": String(body.fileSize),
+        "x-ut-file-type": body.fileType ?? "application/octet-stream",
+        "x-ut-acl": body.acl ?? "private",
+        "x-ut-content-disposition": body.contentDisposition ?? "inline",
+      },
+      body.expiresIn,
+    );
+    return c.json({ key, url });
+  },
+);
+
+app.route("/v7", v7api);
+app.post(
+  "/route-metadata",
+  zValidator("json", RouteMetadataRequestSchema),
+  async (c) => {
+    const body = c.req.valid("json");
+    logger.log("Received route metadata for fileKeys:", body.fileKeys);
+
+    const { count } = await prisma.file.updateMany({
+      where: {
+        key: { in: body.fileKeys },
+      },
+      data: {
+        metadata: body.metadata ? JSON.stringify(body.metadata) : null,
+        callbackUrl: body.callbackUrl,
+        callbackSlug: body.callbackSlug,
+      },
+    });
+
+    logger.debug(`Updated ${count} file(s) with callback metadata.`);
+
+
+    return c.json({ ok: true });
+  },
+);
+app.get("/f/:fileKey", async (c) => {
+  const fileKey = c.req.param("fileKey");
+  logger.log("CDN request for fileKey:", fileKey);
+  const file = await prisma.file.findUnique({ where: { key: fileKey } });
+  if (!file) {
+    logger.error("File not found:", fileKey);
+    return c.json({ error: "File not found" }, 404);
+  }
+  if (file.acl === "PRIVATE") {
+    const fullUrl = new URL(c.req.url, BASE_URL).toString();
+    if (!verifyCdnSignedUrl(fullUrl, API_SECRET)) {
+      logger.error("Invalid or expired signed URL for", fileKey);
+      return c.json({ error: "Invalid or expired signed URL" }, 403);
+    }
+  }
+  const downloadObject = await storageAdapter.getDownloadObject(fileKey);
+  if (!(await downloadObject.exists())) {
+    logger.error("File not in storage:", fileKey);
+    return c.json({ error: "File not in storage" }, 404);
+  }
+  c.header("Content-Type", file.type ?? "application/octet-stream");
+  c.header(
+    "Content-Disposition",
+    `${file.contentDisposition}; filename="${file.name}"`,
+  );
+  c.header(
+    "Cache-Control",
+    file.acl === "PRIVATE"
+      ? "private, no-store"
+      : "public, max-age=31536000, immutable",
+  );
+  return c.body(downloadObject.stream());
+});
+app.get("/a/:appID/:fileKey", async (c) => {
+  const fileKey = c.req.param("fileKey");
+  const appID = c.req.param("appID");
+  if (appID !== APP_ID) {
+    logger.error("Invalid app ID in request:", appID);
+    return c.json({ error: "Invalid app ID" }, 403);
+  }
+  logger.log("CDN request for fileKey:", fileKey);
+  const file = await prisma.file.findUnique({ where: { key: fileKey } });
+  if (!file) {
+    logger.error("File not found:", fileKey);
+    return c.json({ error: "File not found" }, 404);
+  }
+  if (file.acl === "PRIVATE") {
+    const fullUrl = new URL(c.req.url, BASE_URL).toString();
+    if (!verifyCdnSignedUrl(fullUrl, API_SECRET)) {
+      logger.error("Invalid or expired signed URL for", fileKey);
+      return c.json({ error: "Invalid or expired signed URL" }, 403);
+    }
+  }
+  const downloadObject = await storageAdapter.getDownloadObject(fileKey);
+  if (!(await downloadObject.exists())) {
+    logger.error("File not in storage:", fileKey);
+    return c.json({ error: "File not in storage" }, 404);
+  }
+  c.header("Content-Type", file.type ?? "application/octet-stream");
+  c.header(
+    "Content-Disposition",
+    `${file.contentDisposition}; filename="${file.name}"`,
+  );
+  c.header(
+    "Cache-Control",
+    file.acl === "PRIVATE"
+      ? "private, no-store"
+      : "public, max-age=31536000, immutable",
+  );
+  return c.body(downloadObject.stream());
+});
+logger.log(`🚀 Server running on ${BASE_URL}`);
+logger.log(`🗄️  Storage provider: ${STORAGE_PROVIDER}`);
+
+export default {
+  fetch: app.fetch,
+  port: Bun.env.PORT || 3000,
+};
+</file>
+
+<file path="package.json">
+{
+  "name": "utserver",
+  "module": "index.ts",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "bun run --hot index.ts",
+    "start": "bun run index.ts",
+    "db:push": "prisma db push",
+    "docker-compose:up": "docker-compose  up -d --build",
+    "docker-compose:down": "docker-compose  down",
+    "docker-compose:logs": "docker-compose  logs -f",
+    "docker-compose:ps": "docker-compose  ps",
+    "docker-compose:update": "git pull && docker-compose  up -d --build",
+    "postinstall": "prisma generate"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "prisma": "6.10.1"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "@hono/zod-validator": "0.7.0",
+    "@prisma/client": "^6.10.1",
+    "consola": "3.4.2",
+    "hono": "4.8.2",
+    "nanoid": "5.1.5",
+    "zod": "3.25.67"
+  }
+}
+</file>
+
+<file path="README.md">
+# utServer - The **unoffical** way to self host **uploadthing**, lightning fast
+
+Running out of storage in uploadthing? Don't want to pay for more storage for testing? Then this is the perfect tool for you. All you need is bun and you have a quick uploadthing server, that works with the official client - out of the box, almost completely compat. We are fully compatiable with the openAPi spec. 
+
+## How to run
+
+The steps are easy, they are just a few things you have to do before you get started - these only need to be done once too
+
+1. Install bun
+2. Clone the repo and install deps
+
+```sh
+git clone https://github.com/brrock/utserver
+cd utserver
+bun i
+```
+
+3. Copy .env.example to .env and edit the env variables, change the api key, base url, app id (this doesn't matter too much - just call it your app name) if you want and port if you want
+4. Generate uploadthing token, because uploadthing base64s it along some config it needs
+
+```sh
+bun bun genUtAPIKey.ts
+```
+
+5. Add these to the app that uses uploadthing that you want to connect to your self hosted version - ensure you are running the latest uploadthing (this is **very** important, if you even want to try older versions, this requires uploadthing 7.7.3 - the core package )
+
+```dotenv
+UPLOADTHING_INGEST_URL="[yourbaseurl]"
+UPLOADTHING_API_URL="[yourbaseurl]"
+UPLOADTHING_UTFS_HOST="[yourbaseurlwithouthttporhttps]"
+UPLOADTHING_UFS_HOST="[yourbaseurlwithouthttporhttps]"
+UPLOADTHING_UFS_APP_ID_LOCATION=path # this is required
+UPLOADTHING_TOKEN={theoneyougeneratedinstep4}
+```
+6. Init the DB - sqlite at the moment
+```sh
+bun prisma db:push
+``` 
+7. Run the server
+
+```sh
+bun start
+# running in debug 
+DEBUG=1 bun start
+```
+## FAQ
+- Is this allowed by UploadThing
+**yes**, it is an allowed, the maintainers have consented
+- What clients do this support
+Just the **js** one is confirmed to work, if you want your client to work make a PR or github issue
+## RoadMap
+- LTS version for multiple ut versions (maintainers wanted)
+- UploadThing tests
+- S3 storage adapter 
+- Vercel blob storage adapter
+</file>
+
+<file path="tsconfig.json">
+{
+  "compilerOptions": {
+    // Environment setup & latest features
+    "lib": ["ESNext"],
+    "target": "ESNext",
+    "module": "Preserve",
+    "moduleDetection": "force",
+    "jsx": "react-jsx",
+    "allowJs": true,
+
+    // Bundler mode
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "noEmit": true,
+
+    // Best practices
+    "strict": true,
+    "skipLibCheck": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+
+    // Some stricter flags (disabled by default)
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "noPropertyAccessFromIndexSignature": false,
+    "baseUrl": ".",
+    "paths": {
+      "lib/*": ["lib/*"]
+    }
+  }
+}
+</file>
+
+</files>
