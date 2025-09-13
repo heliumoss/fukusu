@@ -20,19 +20,29 @@ fukusu is a middleman between the uploadthing package and your own storage bucke
 ## how do i use it
 simple! firstly, deploy your fukusu server. you can do this easily with the **Deploy with Cloudflare** button below:
 
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/heliumoss/fukusu)
+
+> [!IMPORTANT]
+> Your `UPLOADTHING_TOKEN` must begin with `sk_`. UploadThing will not accept your API Key otherwise.
+
+once your fukusu server is online, you'll need to get your API key. you can get this by going to:
+```
+https://<your-fukusu-server-url>/__fukusu/genkey?secret=<your_secret_key>
+```
+
 > [!NOTE]
-> fukusu is not available at this time. please check back later.
+> Make sure you replace `<your-fukusu-server-url>` with the URL of your deployed fukusu server.
+> Also, make sure you replace `<your_secret_key>` with the `UPLOADTHING_TOKEN` you set when deploying
 
-once your fukusu server is online, you'll need to get your API key. You can get this by going to `https://your-fukusu-server.com/__fukusu/genkey?secret=<your_secret_key>`, replacing `<your_secret_key>` with the secret key you set when deploying your fukusu server. you can add this to your `.env` file as `UPLOADTHING_TOKEN`
+You can now add environment variables to your `.env` file to configure Uploadthing to work with your fukusu server:
 
-you can now add your fukusu instance to your `.env` as well with the `UPLOADTHING_INGEST_URL` variable. your `.env` should look something like this:
-
+```ini
+UPLOADTHING_TOKEN="<your-api-key-here>"
+UPLOADTHING_INGEST_URL="https://<your-fukusu-server-url>"
+UPLOADTHING_API_URL="http://<your-fukusu-server-url>"
 ```
-UPLOADTHING_TOKEN=yOuRaPiKeYhErE
-UPLOADTHING_INGEST_URL=https://your-fukusu-server.com
-```
 
-next, modify your `createRouteHandler` to include a configuration object that points `uploadthing` to your server:
+For some frameworks (*cough cough svelte cough cough*), you'll need to modify your `createRouteHandler` to include a configuration object that points **UploadThing** to your server.
 
 ```ts
 // this is an example of how you'd use it in sveltekit:
@@ -53,7 +63,7 @@ const handlers = createRouteHandler({
 export { handlers as GET, handlers as POST };
 ```
 
-and now your uploads will work! for any `UTApi` instances you also need to add the configuration to them in some cases (*cough cough svelte cough cough*). you can do the following:
+and now your uploads will work! for any `UTApi` instances you also need to add the configuration to them. you may do the following:
 ```ts
 const utApi = new UTApi({
   apiUrl: env.UPLOADTHING_API_URL", // you can also use env.UPLOADTHING_INGEST_URL

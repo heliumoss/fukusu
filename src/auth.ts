@@ -1,5 +1,4 @@
 import { Context, Next } from "hono";
-import type { CloudflareBindings } from "../worker-configuration";
 
 // Authentication utilities
 export function parseApiToken(
