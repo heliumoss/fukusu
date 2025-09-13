@@ -1,4 +1,5 @@
 import type { CloudflareBindings } from "../worker-configuration";
+import type { Context } from "hono";
 
 // Utility functions
 export function combineStreams(
@@ -34,11 +35,14 @@ export function combineStreams(
   });
 }
 
-export function generatePublicUrl(
-  env: CloudflareBindings,
-  fileKey: string,
-): string {
-  return `${env.API_BASE_URL}/f/${fileKey}`;
+export function getBaseUrlFromRequest(c: Context): string {
+  const url = new URL(c.req.url);
+  return `${url.protocol}//${url.host}`;
+}
+
+export function generatePublicUrl(c: Context, fileKey: string): string {
+  const baseUrl = getBaseUrlFromRequest(c);
+  return `${baseUrl}/f/${fileKey}`;
 }
 
 export async function calculateFileHash(
@@ -70,11 +74,12 @@ export function generateFileKey(): string {
 }
 
 export async function generateSignedUploadUrl(
-  env: CloudflareBindings,
+  c: Context,
   params: Record<string, string>,
   expiresIn: number,
 ): Promise<string> {
-  const url = new URL(`${env.API_BASE_URL}/${params.key}`);
+  const baseUrl = getBaseUrlFromRequest(c);
+  const url = new URL(`${baseUrl}/${params.key}`);
   const expirationTimestampMs = Date.now() + expiresIn * 1000;
   url.searchParams.set("expires", expirationTimestampMs.toString());
 
@@ -88,7 +93,7 @@ export async function generateSignedUploadUrl(
   const encoder = new TextEncoder();
   const key = await crypto.subtle.importKey(
     "raw",
-    encoder.encode(env.UPLOADTHING_SECRET),
+    encoder.encode(c.env.UPLOADTHING_SECRET),
     { name: "HMAC", hash: "SHA-256" },
     false,
     ["sign"],

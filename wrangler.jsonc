@@ -20,10 +20,7 @@
       "binding": "R2",
     },
   ],
-  "vars": {
-    "API_BASE_URL": "http://localhost:8787",
-    "CLIENT_BASE_URL": "http://localhost:5173",
-  },
+
   "kv_namespaces": [
     {
       "binding": "KV",

@@ -5,6 +5,7 @@ import {
   generateFileKey,
   generateSignedUploadUrl,
   generatePublicUrl,
+  getBaseUrlFromRequest,
 } from "../utils";
 
 const v6api = new Hono<{ Bindings: CloudflareBindings }>();
@@ -320,7 +321,7 @@ v6api.post("/uploadFiles", async (c) => {
     for (const fileInfo of files) {
       const key = generateFileKey();
       const url = await generateSignedUploadUrl(
-        c.env,
+        c,
         {
           key,
           "x-ut-file-name": fileInfo.name,
@@ -336,12 +337,12 @@ v6api.post("/uploadFiles", async (c) => {
         key,
         fileName: fileInfo.name,
         fileType: fileInfo.type,
-        fileUrl: generatePublicUrl(c.env, key),
+        fileUrl: generatePublicUrl(c, key),
         url,
         customId: fileInfo.customId,
         contentDisposition,
         pollingJwt: "not-implemented",
-        pollingUrl: `${c.env.API_BASE_URL}/v6/pollUpload/${key}`,
+        pollingUrl: `${getBaseUrlFromRequest(c)}/v6/pollUpload/${key}`,
         fields: {},
       });
     }

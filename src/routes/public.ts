@@ -149,7 +149,7 @@ publicRoutes.put("/:fileKey", async (c) => {
       });
     }
 
-    const publicUrl = generatePublicUrl(c.env, fileKey);
+    const publicUrl = generatePublicUrl(c, fileKey);
 
     const response: UploadPutResult = {
       url: publicUrl,
