@@ -1,5 +1,4 @@
 import { Hono } from "hono";
-import type { CloudflareBindings } from "../../worker-configuration";
 import { verifySdkSignature } from "../auth";
 import { UploadPutResult, FileMetadata } from "../interfaces";
 import { combineStreams, calculateFileHash, generatePublicUrl } from "../utils";

@@ -1,5 +1,4 @@
 import { Hono } from "hono";
-import type { CloudflareBindings } from "../../worker-configuration";
 import { FileMetadata } from "../interfaces";
 import {
   generateFileKey,
@@ -159,7 +158,7 @@ v6api.post("/requestFileAccess", async (c) => {
       return c.json({ error: "File not found" }, 404);
     }
 
-    const url = generatePublicUrl(c.env, targetFileKey);
+    const url = generatePublicUrl(c, targetFileKey);
     return c.json({ url, ufsUrl: url });
   } catch (error) {
     console.error("Request file access error:", error);
@@ -191,7 +190,7 @@ v6api.get("/pollUpload/:fileKey", async (c) => {
             fileName: metadata.name,
             fileSize: metadata.size,
             fileType: metadata.type,
-            fileUrl: generatePublicUrl(c.env, metadata.key),
+            fileUrl: generatePublicUrl(c, metadata.key),
             customId: metadata.customId,
           }
         : null,

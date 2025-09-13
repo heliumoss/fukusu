@@ -1,5 +1,4 @@
 import { Hono } from "hono";
-import type { CloudflareBindings } from "../../worker-configuration";
 import { generateFileKey, generateSignedUploadUrl } from "../utils";
 
 const v7api = new Hono<{ Bindings: CloudflareBindings }>();
@@ -17,7 +16,7 @@ v7api.post("/prepareUpload", async (c) => {
     const body = await c.req.json();
     const key = generateFileKey();
     const url = await generateSignedUploadUrl(
-      c.env,
+      c,
       {
         key,
         "x-ut-file-name": body.fileName,

@@ -1,4 +1,3 @@
-import type { CloudflareBindings } from "../worker-configuration";
 import type { Context } from "hono";
 
 // Utility functions

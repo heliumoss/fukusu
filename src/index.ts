@@ -5,7 +5,7 @@ import { logger } from "./middleware";
 import publicRoutes from "./routes/public";
 import v6api from "./routes/v6";
 import v7api from "./routes/v7";
-import { CloudflareBindings } from "../worker-configuration";
+import internalRoutes from "./routes/internal";
 
 const app = new Hono<{ Bindings: CloudflareBindings }>();
 
@@ -21,6 +21,7 @@ app.use("/callback-result", authMiddleware);
 
 // Routes
 app.route("/", publicRoutes);
+app.route("/__fukusu", internalRoutes);
 app.route("/v6", v6api);
 app.route("/v7", v7api);
 
