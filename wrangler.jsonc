@@ -7,10 +7,6 @@
   "name": "fukusu",
   "main": "src/index.ts",
   "compatibility_date": "2025-09-06",
-  "assets": {
-    "binding": "ASSETS",
-    "directory": "./public",
-  },
   "observability": {
     "enabled": true,
   },
